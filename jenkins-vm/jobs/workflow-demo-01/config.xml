@@ -1,0 +1,106 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<flow-definition plugin="workflow-job@1.11">
+  <actions/>
+  <description></description>
+  <keepDependencies>false</keepDependencies>
+  <properties>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.StringParameterDefinition>
+          <name>tomcat_username</name>
+          <description>Tomcat username for manager-script role</description>
+          <defaultValue>your_tomcat_username</defaultValue>
+        </hudson.model.StringParameterDefinition>
+        <hudson.model.PasswordParameterDefinition>
+          <name>tomcat_password</name>
+          <description></description>
+          <defaultValue>your_tomcat_password</defaultValue>
+        </hudson.model.PasswordParameterDefinition>
+        <hudson.model.BooleanParameterDefinition>
+          <name>release</name>
+          <description></description>
+          <defaultValue>false</defaultValue>
+        </hudson.model.BooleanParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
+  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps@1.11">
+    <script>node {
+  def mvnHome = tool &apos;Maven&apos;
+  def devHost = &apos;192.168.2.3&apos;
+  def prodHost = &apos;192.168.2.3&apos;
+  
+  dir(&apos;dev&apos;) {
+    stage &apos;Dev build&apos;
+    git url: &apos;https://github.com/ryan-ju/resteasy-demo-01.git&apos;
+    // Print version
+    def v = version()
+    if (v) {
+      echo &quot;Building version ${v}&quot;
+    }
+  
+    sh &quot;${mvnHome}/bin/mvn clean install&quot;
+  
+    stage &apos;Dev deploy&apos;
+    deploy(&quot;resteasy-demo-01-server/target/resteasy-demo-01-*.war&quot;, devHost, &quot;/dev&quot;)
+  }
+    
+  dir(&apos;dev-test&apos;) {
+    stage &apos;Dev QA&apos;
+    git url: &apos;https://github.com/ryan-ju/resteasy-demo-01-test.git&apos;
+    sh &quot;${mvnHome}/bin/mvn -Dhost=http://${devHost} -Dport=8080 -Dcontext=/dev/api clean install&quot;
+  }
+  
+  dir(&apos;dev&apos;) {
+      stage &apos;Upload artifact&apos;
+      // Print version
+      def v = version()
+      if (v) {
+        echo &quot;Uploading version ${v}&quot;
+      }
+  
+      sh &quot;${mvnHome}/bin/mvn -Dmaven.test.skip=true -P nexus deploy&quot;
+  }
+  
+  if (release.toString().toBoolean()) {
+      dir(&apos;dev&apos;) {
+         stage &apos;Release build&apos;
+         sh &quot;git checkout master&quot;
+         sh &quot;git pull origin master&quot;
+         
+         def rv = releaseVersion()
+         
+         sh &quot;${mvnHome}/bin/mvn -P nexus -Darguments=\&quot;-DskipTests\&quot; release:prepare release:perform&quot;
+         
+         if (rv) {
+             // Ask for manual permission to continue
+             input &quot;Ready to update prod?&quot;
+             sh &quot;curl -L -o resteasy-server.war https://oss.sonatype.org/service/local/repositories/releases/content/org/itechet/resteasy-demo-01-server/${rv}/resteasy-demo-01-server-${rv}.war&quot;
+             deploy(&quot;resteasy-server.war&quot;, prodHost, &quot;/resteasy&quot;)
+         } else {
+             error &quot;Failed to get release version from pom.xml&quot;
+         }
+      }
+  }
+}
+
+// Get version from pom.xml
+def version() {
+    def matcher = readFile(&apos;pom.xml&apos;) =~ &apos;&lt;version&gt;(.+)&lt;/version&gt;&apos;
+    matcher ? matcher[0][1] : null
+}
+
+// Get release version from snapshot pom.xml
+def releaseVersion() {
+    def matcher = readFile(&apos;pom.xml&apos;) =~ &apos;&lt;version&gt;(.+)-SNAPSHOT&lt;/version&gt;&apos;
+    matcher ? matcher[0][1] : null
+}
+
+// Deploy file to tomcat
+def deploy(file, host, context) {
+    sh &quot;curl -T ${file} -u \&quot;${tomcat_username}:${tomcat_password}\&quot; http://${host}:8080/manager/text/deploy?path=${context}&amp;update=true&quot;
+}</script>
+    <sandbox>false</sandbox>
+  </definition>
+  <triggers/>
+</flow-definition>

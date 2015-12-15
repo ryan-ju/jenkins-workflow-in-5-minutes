@@ -1,0 +1,120 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+# All Vagrant configuration is done below. The "2" in Vagrant.configure
+# configures the configuration version (we support older styles for
+# backwards compatibility). Please don't change it unless you know what
+# you're doing.
+Vagrant.configure(2) do |config|
+  # The most common configuration options are documented and commented below.
+  # For a complete reference, please see the online documentation at
+  # https://docs.vagrantup.com.
+
+  # Every Vagrant development environment requires a box. You can search for
+  # boxes at https://atlas.hashicorp.com/search.
+  config.vm.box = "ubuntu/trusty64"
+
+  # Disable automatic box update checking. If you disable this, then
+  # boxes will only be checked for updates when the user runs
+  # `vagrant box outdated`. This is not recommended.
+  # config.vm.box_check_update = false
+
+  # Create a forwarded port mapping which allows access to a specific port
+  # within the machine from a port on the host machine. In the example below,
+  # accessing "localhost:8080" will access port 80 on the guest machine.
+  # config.vm.network "forwarded_port", guest: 80, host: 8080
+
+  # Create a private network, which allows host-only access to the machine
+  # using a specific IP.
+  config.vm.network "private_network", ip: "192.168.2.3"
+
+  # Create a public network, which generally matched to bridged network.
+  # Bridged networks make the machine appear as another physical device on
+  # your network.
+  # config.vm.network "public_network"
+
+  # Share an additional folder to the guest VM. The first argument is
+  # the path on the host to the actual folder. The second argument is
+  # the path on the guest to mount the folder. And the optional third
+  # argument is a set of non-required options.
+  # config.vm.synced_folder "../data", "/vagrant_data"
+
+  # Provider-specific configuration so you can fine-tune various
+  # backing providers for Vagrant. These expose provider-specific options.
+  # Example for VirtualBox:
+  #
+  config.vm.provider "virtualbox" do |vb|
+    # Display the VirtualBox GUI when booting the machine
+  #   vb.gui = true
+  #
+    # Customize the amount of memory on the VM:
+    vb.memory = "2048"
+  end
+  #
+  # View the documentation for the provider you are using for more
+  # information on available options.
+
+  # Define a Vagrant Push strategy for pushing to Atlas. Other push strategies
+  # such as FTP and Heroku are also available. See the documentation at
+  # https://docs.vagrantup.com/v2/push/atlas.html for more information.
+  # config.push.define "atlas" do |push|
+  #   push.app = "YOUR_ATLAS_USERNAME/YOUR_APPLICATION_NAME"
+  # end
+
+  # Enable provisioning with a shell script. Additional provisioners such as
+  # Puppet, Chef, Ansible, Salt, and Docker are also available. Please see the
+  # documentation for more information about their specific syntax and use.
+  config.vm.provision "shell", inline: <<-SHELL
+    JDK_HOME=/usr/local/jdk
+    TOMCAT_HOME=/usr/local/tomcat
+
+    echo "==== Create /var/log/vagrant ===="
+    mkdir -p /var/log/vagrant
+
+    # Install JDK8.  You MUST ensure the relevant ./tmp/jdk<version>.tar.gz file exists.
+    echo "==== Installing JDK8 ... ===="
+    mkdir -p $JDK_HOME
+    tar -zxf /vagrant/tmp/jdk*.gz -C $JDK_HOME --strip-components 1
+    # Also sets keytool to point to the one in JDK.
+    update-alternatives --install "/usr/bin/java" "java" "$JDK_HOME/bin/java" 2000 --slave "/usr/bin/javac" "javac" "$JDK_HOME/bin/javac" --slave "/usr/bin/keytool" "keytool" "$JDK_HOME/bin/keytool"
+    # Add JAVA_HOME to environment variables
+    echo "JAVA_HOME=$JDK_HOME" >> /etc/environment
+    echo "==== Installed JDK8! ===="
+
+    echo "==== Installing tomcat 8 ... ===="
+    mkdir -p $TOMCAT_HOME
+    curl -L -o /tmp/tomcat.tar.gz http://mirrors.muzzy.org.uk/apache/tomcat/tomcat-8/v8.0.30/bin/apache-tomcat-8.0.30.tar.gz
+    tar -zxf /tmp/tomcat.tar.gz -C $TOMCAT_HOME --strip-components 1
+    echo "CATALINA_HOME=$TOMCAT_HOME" >> /etc/environment
+    cp /vagrant/tomcat /etc/init.d/
+    chmod 755 /etc/init.d/tomcat
+    # Using @ as delimiter as base64 encoding can contain slash
+    sed -i -e "s@<%= tomcat_home =>@$TOMCAT_HOME@" /etc/init.d/tomcat
+    # Add tomcat as service
+    update-rc.d tomcat defaults
+    echo "==== Add tomcat user ===="
+    cp /vagrant/tomcat-users.xml $TOMCAT_HOME/conf/tomcat-users.xml
+    echo "==== Add SSL keystore ===="
+    # Generate a random password for keystore
+    PASSWORD=$(openssl rand -base64 32)
+    # Generate a keystore
+    keytool -genkeypair -noprompt -dname "CN=Unknown, OU=Unknown, O=Unknown, L=Unknown, S=Unknown, C=Unknown" -alias tomcat -keyalg RSA -keystore /home/vagrant/.keystore -storepass $PASSWORD -keypass $PASSWORD
+    # Copy over the server.xml template
+    echo "==== Copy server.xml template ===="
+    cp /vagrant/server.xml $TOMCAT_HOME/conf/server.xml
+    # Update the connector tag's keystore password
+    echo "==== Update keystore password in server.xml ===="
+    # Using @ as delimiter as base64 encoding can contain slash
+    sed -i -e "s@<%= keystorePass =>@$PASSWORD@" $TOMCAT_HOME/conf/server.xml
+    # Change owner
+    chown -R vagrant:vagrant $TOMCAT_HOME
+    echo "==== Installed tomcat 8! ===="
+  SHELL
+
+  # Run as "vagrant" user
+  config.vm.provision "shell", privileged: false, inline: <<-SHELL
+    echo "==== Starting tomcat 8 service ... ===="
+    service tomcat start
+    echo "==== Started tomcat 8 service! ===="
+  SHELL
+end
